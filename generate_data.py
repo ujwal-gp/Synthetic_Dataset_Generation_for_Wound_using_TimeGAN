@@ -44,5 +44,6 @@ if __name__ == "__main__":
         n_entities = 10
 
         sample = synth.sample(n_entities=n_entities)
+        print(f"Generated {len(sample)} samples.")
 
         sample.to_pandas().to_csv(r"test_synth_samples.csv")
