@@ -2,7 +2,7 @@ import time
 from paho.mqtt import client as mqtt_client
 
 # Configuration
-broker = "localhost"
+broker = "192.168.0.36"
 port = 1883
 topic = "smartwound/gas"  # wildcard to receive all vitals
 
@@ -15,18 +15,18 @@ def on_message(client, userdata, msg):
         print(f"⚠️ Error decoding message: {e}")
 
 # Callback when connected to broker
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
+def on_connect(client, userdata, flags, reason_code, properties):
+    if reason_code == 0:
         print("✅ Connected to MQTT Broker!")
         client.subscribe(topic)
         print(f"🔔 Subscribed to `{topic}`")
     else:
-        print(f"❌ Connection failed with code {rc}")
+        print(f"❌ Connection failed with code {reason_code}")
 
 # Callback for disconnection
-def on_disconnect(client, userdata, rc):
-    print(f"🔌 Disconnected (rc={rc})")
-    if rc != 0:
+def on_disconnect(client, userdata, reason_code):
+    print(f"🔌 Disconnected (reason_code={reason_code})")
+    if reason_code != 0:
         print("⚠️ Unexpected disconnection. Attempting to reconnect...")
         reconnect(client)
 
@@ -34,6 +34,7 @@ def on_disconnect(client, userdata, rc):
 def reconnect(client):
     while True:
         try:
+            client.username_pw_set("ujwal__gp", "root")
             client.reconnect()
             print("🔁 Reconnected to broker.")
             return
@@ -43,12 +44,15 @@ def reconnect(client):
 
 # MQTT client setup
 def main():
-    client = mqtt_client.Client()
+    client = mqtt_client.Client(
+        callback_api_version=mqtt_client.CallbackAPIVersion.VERSION2
+    )
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
     client.on_message = on_message
 
     try:
+        client.username_pw_set("ujwal__gp", "root")
         client.connect(broker, port)
     except Exception as e:
         print(f"❌ Failed to connect: {e}")

@@ -6,7 +6,7 @@ import string
 from paho.mqtt import client as mqtt_client
 
 # MQTT Broker Configuration
-broker = 'localhost'
+broker = '192.168.0.36'
 port = 1883
 topic = "smartwound/gas"  # Make sure topic is valid
 NUM_CLIENTS = random.randint(5, 15)
@@ -28,8 +28,13 @@ def generate_random_client_id():
 
 # Connect one MQTT client
 def connect_mqtt(client_id):
-    client = mqtt_client.Client(client_id=client_id)
+    client = mqtt_client.Client(
+        client_id=client_id,
+        protocol=mqtt_client.MQTTv5,
+        callback_api_version=mqtt_client.CallbackAPIVersion.VERSION2 # ✅ use Callback API v2
+        )
     try:
+        client.username_pw_set("ujwal__gp", "root")
         client.connect(broker, port)
         print(f"✅ Connected client ID: {client_id}")
         return client
