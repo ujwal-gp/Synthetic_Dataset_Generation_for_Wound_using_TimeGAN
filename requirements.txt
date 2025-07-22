@@ -3,3 +3,6 @@ pandas==2.2.3
 keras==3.10.0
 tensorflow==2.19.0
 ydata-sdk==3.0.8
+flwr==1.19.0
+xgboost==3.0.2
+scikit-learn==1.6.1
