@@ -4,6 +4,7 @@
 # Virtual environments
 venv/
 env/
+timegan_env/
 
 # Logs
 *.log
