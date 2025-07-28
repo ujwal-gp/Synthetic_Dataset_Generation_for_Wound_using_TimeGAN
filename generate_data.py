@@ -38,6 +38,9 @@ else:
 scaler = MinMaxScaler()
 scaled_data = scaler.fit_transform(wound_gas_data[cols])
 synth_data = synth.sample(n_samples=len(scaled_data))
+print("synth_data:",synth_data[0].head())
+flat_synth_data = pd.concat(synth_data, ignore_index=True)
+flat_synth_data.to_csv("synthetic_wound_gas_flat.csv", index=False)
 
 # Plotting some generated samples. Both Synthetic and Original data are still standartized with values between [0,1]
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 10))
