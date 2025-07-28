@@ -6,6 +6,9 @@ venv/
 env/
 timegan_env/
 
+# Bytecode
+__pycache__/
+
 # Logs
 *.log
 
@@ -17,3 +20,7 @@ timegan_env/
 
 # Ignore model files
 *.pkl
+
+#Ignore pcapng
+*.pcapng
+*.pcap
