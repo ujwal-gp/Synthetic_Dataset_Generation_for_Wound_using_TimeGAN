@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-n_samples = 50  # number of time steps
+n_samples = 1000  # number of time steps
 np.random.seed(42)
 
 # Generate realistic ranges
