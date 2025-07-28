@@ -1,49 +1,52 @@
-import os
+from os import path
+from ydata_synthetic.synthesizers.timeseries import TimeSeriesSynthesizer
+from ydata_synthetic.preprocessing.timeseries import processed_stock
+from ydata_synthetic.synthesizers import ModelParameters, TrainParameters
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
-from ydata.metadata import Metadata
-from ydata.dataset.filetype import FileType
-from ydata.connectors import LocalConnector
-from ydata.utils.data_types import VariableType
-from ydata.synthesizers.timeseries.model import TimeSeriesSynthesizer
+# Define model parameters
+gan_args =  ModelParameters(batch_size=128,
+                           lr=5e-4,
+                           noise_dim=32,
+                           layers_dim=128,
+                           latent_dim=24,
+                           gamma=1)
 
-os.environ['YDATA_LICENSE_KEY'] = '7ed1590a-07cf-4101-a598-ff57bdcd5513'
+train_args = TrainParameters(epochs=1000,
+                             sequence_length=24,
+                             number_sequences=4)
 
-# Assemble DataFrame
-connector = LocalConnector()
-real_data = connector.read_file("synthetic_wound_gas_flat.csv", file_type=FileType.CSV, has_header=True)
-print(real_data.columns)
-real_data.astype("timestamp", VariableType.DATE)
-dataset = real_data
+# Read the data
+stock_data = pd.read_csv("synthetic_wound_gas_data.csv")
+cols = list(stock_data.columns)
 
-print("\033[1m Dataset schema \033[0m")
-print(dataset.schema)
+# Training the TimeGAN synthesizer
+if path.exists('synthetic_wound_gas_data.pkl'):
+    synth = TimeSeriesSynthesizer.load('synthetic_wound_gas_data.pkl')
+    print(synth)
+else:
+    synth = TimeSeriesSynthesizer(modelname='timegan', model_parameters=gan_args)
+    print(synth)
+    synth.fit(stock_data, train_args, num_cols=cols)
+    synth.save('synthetic_wound_gas_data.pkl')
 
-if __name__ == "__main__":
+# Generating new synthetic samples
+stock_data_blocks = processed_stock(path='synthetic_wound_gas_data.csv', seq_len=24)
+synth_data = synth.sample(n_samples=len(stock_data_blocks))
 
-    TRAIN = True
-    SYNTHESIZE = True
+# Plotting some generated samples. Both Synthetic and Original data are still standartized with values between [0,1]
+fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 10))
+axes=axes.flatten()
 
-    print(real_data.head())
-    m = Metadata(real_data, dataset_attrs={"sortbykey": "timestamp"})
-    # Getting the all metadata summary
-    print("\n\033[1mMetadata summary\033[0m")
-    print(m.summary)
+time = list(range(1,25))
+obs = np.random.randint(len(stock_data_blocks))
 
-    # Print the metadata
-    print(m)
-
-    if TRAIN is True:
-        out_path = "./test_trained_model.pkl"
-        synth = TimeSeriesSynthesizer()
-        # Training configuration
-        synth.fit(real_data, metadata=m)
-        synth.save(out_path)
-
-    if SYNTHESIZE is True:
-        synth = TimeSeriesSynthesizer.load(out_path)
-        n_entities = 10
-
-        sample = synth.sample(n_entities=n_entities)
-        print(f"Generated {len(sample)} samples.")
-
-        sample.to_pandas().to_csv(r"test_synth_samples.csv")
+for j, col in enumerate(cols):
+    df = pd.DataFrame({'Real': stock_data_blocks[obs][:, j],
+                   'Synthetic': synth_data[obs].iloc[:, j]})
+    df.plot(ax=axes[j],
+            title = col,
+            secondary_y='Synthetic data', style=['-', '--'])
+fig.tight_layout()
