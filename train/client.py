@@ -3,8 +3,9 @@ import flwr as fl
 import xgboost as xgb
 import numpy as np
 import os
+import json
 import pandas as pd
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, f1_score, confusion_matrix
 from sklearn.preprocessing import MinMaxScaler
 import sys
 
@@ -71,19 +72,48 @@ class XGBClient(fl.client.NumPyClient):
 
         preds = self.model.predict(self.X_test)
 
-        accuracy = accuracy_score(self.y_test, preds)
-        precision = precision_score(self.y_test, preds, average='weighted', zero_division=0)
-        recall = recall_score(self.y_test, preds, average='weighted', zero_division=0)
-        f1 = f1_score(self.y_test, preds, average='weighted', zero_division=0)
+        acc = accuracy_score(self.y_test, preds)
+        prec, rec, f1, _ = precision_recall_fscore_support(
+            self.y_test, preds, average="weighted", zero_division=0
+        )
 
-        print(f"📊 Client {self.client_id} Evaluation — Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+        # --- confusion matrix (sum on server) ---
+        classes = sorted(np.unique(np.concatenate([self.y_test, preds])))
+        cm = confusion_matrix(self.y_test, preds, labels=classes)  # shape [C,C]
 
-        return float(1 - accuracy), len(self.X_test), {
-            "accuracy": float(accuracy),
-            "precision": float(precision),
-            "recall": float(recall),
-            "f1_score": float(f1)
+        # --- feature importance (gain) aligned to feature count ---
+        # XGBoost names features as f0, f1, ... in the booster
+        booster = self.model.get_booster()
+        gain_dict = booster.get_score(importance_type="gain")  # {"f0": val, ...}
+        num_feats = self.X_train.shape[1]
+        fi = np.zeros(num_feats, dtype=float)
+        for k, v in gain_dict.items():
+            idx = int(k[1:])  # "f12" -> 12
+            if idx < num_feats:
+                fi[idx] = v
+
+        print(f"📊 Client {self.client_id} Evaluation — Accuracy: {acc:.4f}, Precision: {prec:.4f}, Recall: {rec:.4f}, F1: {f1:.4f}")
+
+        # IMPORTANT: metrics dict must be scalars/str/bytes. Encode arrays as JSON strings.
+        metrics = {
+            "accuracy": float(acc),
+            "precision": float(prec),
+            "recall": float(rec),
+            "f1": float(f1),
+
+            # include sizes so server can do weighted averaging
+            "num_test_examples": int(len(self.X_test)),
+
+            # JSON-encoded arrays
+            "confusion_matrix_json": json.dumps({
+                "labels": list(map(int, classes)),
+                "matrix": cm.tolist(),
+            }),
+            "feature_importance_json": json.dumps(fi.tolist()),
         }
+
+        # Flower expects (loss, num_examples, metrics). Use 1-acc as loss proxy.
+        return float(1.0 - acc), len(self.X_test), metrics
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
