@@ -6,7 +6,6 @@ import os
 import pandas as pd
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.preprocessing import MinMaxScaler
-from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
 import sys
 
 # Load client-specific data
