@@ -43,16 +43,23 @@ class XGBClient(fl.client.NumPyClient):
         self.X_test = X_test
         self.y_test = y_test
         self.client_id = client_id
+        self.model_path = f"xgb_model_client{client_id}.pkl"
 
-        self.model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
+        if os.path.exists(self.model_path):
+            with open(self.model_path, "rb") as f:
+                self.model = pickle.load(f)
+            print(f"✅ Loaded model from {self.model_path}")
+        else:
+            self.model = xgb.XGBClassifier()
+            print(f"🆕 Initialized new model for Client {client_id}")
         self.fitted = False  # ✅ Initialize fitted flag
 
     def get_parameters(self, config):
         if self.fitted:
-            return self.model.get_booster().get_dump()
+            raw_bytes = self.model.get_booster().save_raw()
+            return [np.frombuffer(raw_bytes, dtype=np.uint8)]
         else:
-            print(f"⚠️ Model not yet fitted for client {self.client_id}. Returning dummy params.")
-            return [np.zeros(1)]
+            return [np.zeros(1, dtype=np.uint8)]
 
     def fit(self, parameters, config):
         self.model.fit(self.X_train, self.y_train)
