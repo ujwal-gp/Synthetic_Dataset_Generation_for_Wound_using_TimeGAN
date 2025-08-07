@@ -16,7 +16,7 @@ __pycache__/
 .vscode/
 
 # Ignore CSVs or data
-*.csv
+client_data/*.csv
 
 # Ignore model files
 *.pkl
