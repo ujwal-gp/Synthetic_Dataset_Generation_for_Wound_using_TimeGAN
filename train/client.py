@@ -6,15 +6,13 @@ import os
 import pandas as pd
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.preprocessing import MinMaxScaler
-import pickle
+from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
 import sys
 
 # Load client-specific data
 def load_client_data(client_id, data_dir="../client_data"):
     train_file = os.path.join(data_dir, f"client_{client_id}_train.csv")
     test_file = os.path.join(data_dir, f"client_{client_id}_test.csv")
-    print(f'test file {train_file}')
-    print(f'test file {test_file}')
 
     train_df = pd.read_csv(train_file)
     test_df = pd.read_csv(test_file)
@@ -25,11 +23,10 @@ def load_client_data(client_id, data_dir="../client_data"):
     X_test = test_df.drop("label", axis=1)
     y_test = test_df["label"]
 
-    # Filter numeric columns only
+    # Filter numeric columns only and scale them
     X_train_numeric = X_train.select_dtypes(include=[np.number]).fillna(0)
     X_test_numeric = X_test.select_dtypes(include=[np.number]).fillna(0)
 
-    # Scale features
     scaler = MinMaxScaler()
     X_train_scaled = scaler.fit_transform(X_train_numeric)
     X_test_scaled = scaler.transform(X_test_numeric)
@@ -43,33 +40,36 @@ class XGBClient(fl.client.NumPyClient):
         self.X_test = X_test
         self.y_test = y_test
         self.client_id = client_id
-        self.model_path = f"xgb_model_client{client_id}.pkl"
-
-        if os.path.exists(self.model_path):
-            with open(self.model_path, "rb") as f:
-                self.model = pickle.load(f)
-            print(f"✅ Loaded model from {self.model_path}")
-        else:
-            self.model = xgb.XGBClassifier()
-            print(f"🆕 Initialized new model for Client {client_id}")
-        self.fitted = False  # ✅ Initialize fitted flag
+        self.model = xgb.XGBClassifier()
+        self.fitted = False
 
     def get_parameters(self, config):
-        if self.fitted:
-            raw_bytes = self.model.get_booster().save_raw()
-            return [np.frombuffer(raw_bytes, dtype=np.uint8)]
-        else:
-            return [np.zeros(1, dtype=np.uint8)]
+        model_path = f"client_model_{self.client_id}.json"
+        self.model.save_model(model_path)  # Always save in JSON format
+        with open(model_path, "r", encoding="utf-8") as f:
+            model_json_str = f.read()
+        return [np.frombuffer(model_json_str.encode("utf-8"), dtype=np.uint8)]
 
     def fit(self, parameters, config):
+        if parameters and parameters[0].size > 1:
+            json_str = bytes(parameters[0].tolist()).decode("utf-8")
+            model_path = f"client_model_{self.client_id}.json"
+            with open(model_path, "w", encoding="utf-8") as f:
+                f.write(json_str)
+            self.model.load_model(model_path)
+
         self.model.fit(self.X_train, self.y_train)
-        self.fitted = True  # ✅ Set flag after training
+
         return self.get_parameters(config), len(self.X_train), {}
 
     def evaluate(self, parameters, config):
-        if parameters:
-            model_bytes = parameters[0]
-            self.model.load_model(bytearray(model_bytes))
+        if parameters and parameters[0].size > 1:
+            json_str = bytes(parameters[0].tolist()).decode("utf-8")
+            model_path = f"client_model_{self.client_id}.json"
+            with open(model_path, "w", encoding="utf-8") as f:
+                f.write(json_str)
+            self.model.load_model(model_path)
+
         preds = self.model.predict(self.X_test)
 
         accuracy = accuracy_score(self.y_test, preds)
@@ -77,7 +77,7 @@ class XGBClient(fl.client.NumPyClient):
         recall = recall_score(self.y_test, preds, average='weighted', zero_division=0)
         f1 = f1_score(self.y_test, preds, average='weighted', zero_division=0)
 
-        print(f"📊 Client {self.client_id} Evaluation - Accuracy: {accuracy:.4f}, F1: {f1:.4f}")
+        print(f"📊 Client {self.client_id} Evaluation — Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
 
         return float(1 - accuracy), len(self.X_test), {
             "accuracy": float(accuracy),
@@ -93,4 +93,8 @@ if __name__ == "__main__":
 
     client_id = int(sys.argv[1])
     X_train, y_train, X_test, y_test = load_client_data(client_id)
-    fl.client.start_client(server_address="172.16.174.136:8081", client=XGBClient(X_train, y_train, X_test, y_test, client_id).to_client())
+
+    fl.client.start_client(
+        server_address="172.16.174.136:8081",
+        client=XGBClient(X_train, y_train, X_test, y_test, client_id).to_client()
+    )
