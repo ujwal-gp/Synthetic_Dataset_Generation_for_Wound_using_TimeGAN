@@ -21,6 +21,9 @@ client_data/*.csv
 # Ignore model files
 *.pkl
 
+# Ignore json files
+*.json
+
 #Ignore pcapng
 *.pcapng
 *.pcap
