@@ -2,14 +2,16 @@
 
 import flwr as fl
 import numpy as np
-import os
-import json
+import os, json, csv, time
+import matplotlib.pyplot as plt
 from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
 
 # Settings
 N_ROUNDS = 10
 N_CLIENTS = 2
 GLOBAL_MODEL_PATH = "global_model.json"
+RUN_DIR = os.path.join("runs", "cm_fi")
+os.makedirs(RUN_DIR, exist_ok=True)
 
 # ---- 1. Initialize a Dummy XGBoost Model (once) ----
 import xgboost as xgb
@@ -23,6 +25,44 @@ def initialize_global_model():
     model.get_booster().save_model(GLOBAL_MODEL_PATH)
     print("📦 Initial global model saved.")
 
+def save_confusion_matrix(cm: np.ndarray, labels, out_path: str):
+    plt.figure(figsize=(6, 5))
+    plt.imshow(cm, interpolation='nearest')
+    plt.title("Global Confusion Matrix")
+    plt.xticks(ticks=np.arange(len(labels)), labels=labels, rotation=45, ha="right")
+    plt.yticks(ticks=np.arange(len(labels)), labels=labels)
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            plt.text(j, i, str(cm[i, j]), ha="center", va="center")
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+
+def save_feature_importance(fi: np.ndarray, out_path: str, feature_names=None, top_k=20):
+    idx = np.argsort(fi)[::-1]
+    idx = idx[:min(top_k, len(idx))]
+    names = [f"f{i}" for i in idx] if feature_names is None else [feature_names[i] for i in idx]
+    vals = fi[idx]
+
+    plt.figure(figsize=(8, max(4, len(idx) * 0.3)))
+    plt.barh(range(len(idx)), vals)
+    plt.gca().invert_yaxis()
+    plt.yticks(range(len(idx)), names)
+    plt.title("Global Feature Importance (avg gain)")
+    plt.xlabel("Importance")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+
+def append_row_csv(csv_path, row_dict, header_order):
+    file_exists = os.path.exists(csv_path)
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=header_order)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row_dict)
 
 # ---- 2. Custom Federated Averaging Strategy ----
 class Strategy(fl.server.strategy.FedAvg):
@@ -135,16 +175,26 @@ class Strategy(fl.server.strategy.FedAvg):
             "f1": float(avg_f1),
         }
 
-        if fi_sum is not None:
-            # Average across clients
-            fi_avg = (fi_sum / k_clients).tolist()
-            agg_metrics["feature_importance_json"] = json.dumps(fi_avg)
+        metrics_csv = os.path.join(RUN_DIR, "metrics.csv")
+        append_row_csv(
+            metrics_csv,
+            {"round": server_round, "accuracy": avg_acc, "precision": avg_prec, "recall": avg_rec, "f1": avg_f1},
+            header_order=["round", "accuracy", "precision", "recall", "f1"],
+        )
+
+        if fi_sum is not None and k_clients > 0:
+            fi_avg = (fi_sum / k_clients)
+            agg_metrics["feature_importance_json"] = json.dumps(fi_avg.tolist())
+            fi_png = os.path.join(RUN_DIR, f"fi_round_{server_round:03d}.png")
+            save_feature_importance(fi_avg, fi_png, feature_names=None, top_k=20)
 
         if global_cm is not None and global_labels is not None:
             agg_metrics["global_confusion_matrix_json"] = json.dumps({
                 "labels": list(map(int, global_labels)),
                 "matrix": global_cm.tolist(),
             })
+            cm_png = os.path.join(RUN_DIR, f"cm_round_{server_round:03d}.png")
+            save_confusion_matrix(global_cm, global_labels, cm_png)
 
         # (loss, metrics) required by Flower; loss here can be 1-acc
         agg_loss = float(1.0 - avg_acc)
