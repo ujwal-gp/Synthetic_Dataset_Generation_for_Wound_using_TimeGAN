@@ -309,25 +309,23 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42, help="Random seed")
 
     # XGB hyperparams (sane defaults)
-    p.add_argument("--n_estimators", type=int, default=100)
-    p.add_argument("--max-depth", type=int, default=6)
-    p.add_argument("--learning-rate", type=float, default=0.1)
+    p.add_argument("--n_estimators", type=int, default=200)
+    p.add_argument("--max_depth", type=int, default=3)
+    p.add_argument("--learning_rate", type=float, default=0.1)
     p.add_argument("--subsample", type=float, default=1.0)
-    p.add_argument("--colsample-bytree", type=float, default=1.0)
-    p.add_argument("--reg-alpha", type=float, default=0.0)
-    p.add_argument("--reg-lambda", type=float, default=1.0)
+    p.add_argument("--colsample_bytree", type=float, default=1.0)
+    p.add_argument("--reg_alpha", type=float, default=0.0)
+    p.add_argument("--reg_lambda", type=float, default=1.0)
     return p.parse_args()
 
 def main():
     args = parse_args()
-    print(f'run_dir {args.run_dir}')
 
     # Resolve data path automatically if not provided
     data_path = resolve_data_path(args.data)
     print(f"📄 Using data: {data_path}")
 
     run_dir = ensure_dir(args.run_dir) if args.run_dir else now_run_dir()
-    print(f'run_dir after {run_dir}')
     print(f"📂 Output directory: {run_dir}")
 
     X_train, y_train, X_test, y_test, feature_names = load_dataset(

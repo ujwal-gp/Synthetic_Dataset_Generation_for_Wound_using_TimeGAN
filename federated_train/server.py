@@ -17,7 +17,7 @@ os.makedirs(RUN_DIR, exist_ok=True)
 import xgboost as xgb
 
 def initialize_global_model():
-    model = xgb.XGBClassifier(n_estimators=100, max_depth=2)
+    model = xgb.XGBClassifier(n_estimators=200, max_depth=3)
     X_dummy = np.array([[0, 0], [1, 1]])
     y_dummy = np.array([0, 1])
     model.fit(X_dummy, y_dummy)
