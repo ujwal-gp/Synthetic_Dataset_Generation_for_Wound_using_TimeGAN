@@ -27,6 +27,7 @@ synthetic_*.csv
 
 # Ignore files under runs folder (e.g., .png, .csv)
 runs/
+runs_client/
 #Ignore pcapng
 *.pcapng
 *.pcap
