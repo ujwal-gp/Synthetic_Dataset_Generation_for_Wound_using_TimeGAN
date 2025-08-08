@@ -56,7 +56,7 @@ def load_partitioned_data(file_path, n_clients, test_size, output_dir):
     df = pd.read_csv(file_path)
 
     # Inject anomaly labels
-    df = generate_labels(df)
+    #df = generate_labels(df)
     print(f"✅ Total rows after labeling: {len(df)}")
     # Shuffle and partition
     split_dfs = np.array_split(df.sample(frac=1, random_state=42), n_clients)

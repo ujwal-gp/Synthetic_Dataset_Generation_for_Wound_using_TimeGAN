@@ -1,4 +1,4 @@
-timestamp,client_id,topic,QoS,message_length,retained,duplicate,Ammonia (ppm),Acetone (ppm),Ethanol (ppm),Hydrogen Sulfide (ppm),anomaly_label
+timestamp,client_id,topic,QoS,message_length,retained,duplicate,Ammonia (ppm),Acetone (ppm),Ethanol (ppm),Hydrogen Sulfide (ppm),label
 2025-08-04 17:29:06.831871,sensor_004,wound/gas/sensor_004,2,101,True,True,4.08,7.91,3.02,1.39,0
 2025-08-04 15:24:44.832268,sensor_005,wound/gas/sensor_005,0,100,True,False,0.9,9.71,4.18,0.72,1
 2025-08-04 15:56:50.832498,sensor_002,wound/gas/sensor_002,2,99,False,False,8.92,3.27,3.1,0.5,0
