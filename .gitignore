@@ -25,6 +25,8 @@ synthetic_*.csv
 # Ignore json files
 *.json
 
+# Ignore files under runs folder (e.g., .png, .csv)
+runs/
 #Ignore pcapng
 *.pcapng
 *.pcap
