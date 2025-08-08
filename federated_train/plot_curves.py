@@ -29,7 +29,6 @@ if __name__ == "__main__":
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "accuracy_curve.png"), dpi=150)
-    plt.close()
 
     # f1 curve
     plt.figure()
@@ -40,4 +39,3 @@ if __name__ == "__main__":
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "f1_curve.png"), dpi=150)
-    plt.close()
