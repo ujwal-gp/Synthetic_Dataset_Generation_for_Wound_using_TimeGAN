@@ -17,6 +17,7 @@ __pycache__/
 
 # Ignore CSVs or data
 client_data/*.csv
+synthetic_/*.csv
 
 # Ignore model files
 *.pkl
