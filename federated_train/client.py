@@ -9,6 +9,11 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support, f1_
 from sklearn.preprocessing import MinMaxScaler
 import sys
 
+# --- plotting (headless-safe) ---
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 # Load client-specific data
 def load_client_data(client_id, data_dir="../client_data"):
     train_file = os.path.join(data_dir, f"client_{client_id}_train.csv")
@@ -41,7 +46,6 @@ class XGBClient(fl.client.NumPyClient):
         self.y_test = y_test
         self.client_id = client_id
         self.model = xgb.XGBClassifier()
-        self.fitted = False
 
     def get_parameters(self, config):
         model_path = f"client_model_{self.client_id}.json"
@@ -88,11 +92,69 @@ class XGBClient(fl.client.NumPyClient):
         num_feats = self.X_train.shape[1]
         fi = np.zeros(num_feats, dtype=float)
         for k, v in gain_dict.items():
-            idx = int(k[1:])  # "f12" -> 12
-            if idx < num_feats:
-                fi[idx] = v
+            try:
+                idx = int(k[1:])  # "f12" -> 12
+                if idx < num_feats:
+                    fi[idx] = v
+            except Exception:
+                pass
 
         print(f"📊 Client {self.client_id} Evaluation — Accuracy: {acc:.4f}, Precision: {prec:.4f}, Recall: {rec:.4f}, F1: {f1:.4f}")
+
+        # ---------------- Local saves: PNG + JSON ----------------
+        run_dir = os.path.join(
+            "runs_client", f"client_{self.client_id}"
+        )
+        os.makedirs(run_dir, exist_ok=True)
+
+        # Confusion matrix PNG
+        plt.figure(figsize=(6, 5))
+        plt.imshow(cm, interpolation="nearest")
+        plt.title(f"Client {self.client_id} — Confusion Matrix")
+        plt.xticks(ticks=np.arange(len(classes)), labels=classes, rotation=45, ha="right")
+        plt.yticks(ticks=np.arange(len(classes)), labels=classes)
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                plt.text(j, i, str(cm[i, j]), ha="center", va="center")
+        plt.xlabel("Predicted")
+        plt.ylabel("True")
+        plt.tight_layout()
+        cm_png = os.path.join(run_dir, "confusion_matrix.png")
+        plt.savefig(cm_png, dpi=150)
+        plt.close()
+
+        # Confusion matrix JSON
+        cm_json = {
+            "labels": list(map(int, classes)),
+            "matrix": cm.tolist(),
+        }
+        with open(os.path.join(run_dir, "confusion_matrix.json"), "w", encoding="utf-8") as f:
+            json.dump(cm_json, f, ensure_ascii=False, indent=2)
+
+        # Feature importance PNG (top-k)
+        top_k = min(20, num_feats)
+        order = np.argsort(fi)[::-1][:top_k]
+        names = [f"f{i}" for i in order]
+        vals = fi[order]
+
+        plt.figure(figsize=(8, max(4, len(order) * 0.3)))
+        plt.barh(range(len(order)), vals)
+        plt.gca().invert_yaxis()
+        plt.yticks(range(len(order)), names)
+        plt.title(f"Client {self.client_id} — Feature Importance (gain)")
+        plt.xlabel("Importance")
+        plt.tight_layout()
+        fi_png = os.path.join(run_dir, "feature_importance.png")
+        plt.savefig(fi_png, dpi=150)
+        plt.close()
+
+        # Feature importance JSON (full vector)
+        with open(os.path.join(run_dir, "feature_importance.json"), "w", encoding="utf-8") as f:
+            json.dump(fi.tolist(), f, ensure_ascii=False)
+
+        print(f"[Client {self.client_id}] Saved CM → {cm_png}")
+        print(f"[Client {self.client_id}] Saved FI → {fi_png}")
+        # ---------------------------------------------------------
 
         # IMPORTANT: metrics dict must be scalars/str/bytes. Encode arrays as JSON strings.
         metrics = {
