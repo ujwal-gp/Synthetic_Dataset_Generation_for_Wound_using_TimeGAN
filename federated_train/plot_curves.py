@@ -1,5 +1,6 @@
 import csv
 import matplotlib.pyplot as plt
+import os
 
 def load_metrics(csv_path):
     rounds, acc, prec, rec, f1 = [], [], [], [], []
@@ -17,6 +18,8 @@ if __name__ == "__main__":
     csv_path = "runs/cm_fi/metrics.csv"
     rounds, acc, prec, rec, f1 = load_metrics(csv_path)
 
+    out_dir = os.path.dirname(csv_path)
+
     # accuracy curve
     plt.figure()
     plt.plot(rounds, acc, marker="o")
@@ -25,7 +28,8 @@ if __name__ == "__main__":
     plt.ylabel("Accuracy")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig("runs/cm_fi/accuracy_curve.png", dpi=150)
+    plt.savefig(os.path.join(out_dir, "accuracy_curve.png"), dpi=150)
+    plt.close()
 
     # f1 curve
     plt.figure()
@@ -35,4 +39,5 @@ if __name__ == "__main__":
     plt.ylabel("F1")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig("runs/cm_fi/f1_curve.png", dpi=150)
+    plt.savefig(os.path.join(out_dir, "f1_curve.png"), dpi=150)
+    plt.close()
