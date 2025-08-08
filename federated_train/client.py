@@ -5,8 +5,8 @@ import numpy as np
 import os
 import json
 import pandas as pd
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, f1_score, confusion_matrix
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, roc_auc_score, roc_curve
+from sklearn.preprocessing import MinMaxScaler, label_binarize
 import sys
 
 # --- plotting (headless-safe) ---
@@ -99,7 +99,53 @@ class XGBClient(fl.client.NumPyClient):
             except Exception:
                 pass
 
-        print(f"📊 Client {self.client_id} Evaluation — Accuracy: {acc:.4f}, Precision: {prec:.4f}, Recall: {rec:.4f}, F1: {f1:.4f}")
+        # ---- AUC + ROC (binary or multiclass) ----
+        auc_val = 0.0
+        try:
+            proba = self.model.predict_proba(self.X_test)
+            unique_classes = np.unique(self.y_test)
+
+            # Guard against single-class y_test (AUC undefined)
+            if len(unique_classes) >= 2:
+                if proba.shape[1] == 2:  # binary
+                    y_score = proba[:, 1]
+                    auc_val = float(roc_auc_score(self.y_test, y_score))
+                    # ROC curve for binary
+                    fpr, tpr, _ = roc_curve(self.y_test, y_score)
+                    roc_curves = {"fpr": fpr, "tpr": tpr}
+                    is_multiclass = False
+                else:  # multiclass
+                    all_labels = np.unique(np.concatenate([self.y_train, self.y_test]))
+                    y_true_bin = label_binarize(self.y_test, classes=all_labels)
+                    # weighted OVR AUC
+                    auc_val = float(
+                        roc_auc_score(y_true_bin, proba, average="weighted", multi_class="ovr")
+                    )
+                    # micro/macro ROC
+                    # micro
+                    fpr_micro, tpr_micro, _ = roc_curve(y_true_bin.ravel(), proba.ravel())
+                    # macro: average interpolated ROC across classes
+                    fpr_grid = np.linspace(0, 1, 1001)
+                    tpr_accum = np.zeros_like(fpr_grid)
+                    k = proba.shape[1]
+                    for c in range(k):
+                        fpr_c, tpr_c, _ = roc_curve(y_true_bin[:, c], proba[:, c])
+                        tpr_accum += np.interp(fpr_grid, fpr_c, tpr_c, left=0, right=1)
+                    tpr_macro = tpr_accum / k
+                    roc_curves = {
+                        "fpr_micro": fpr_micro,
+                        "tpr_micro": tpr_micro,
+                        "fpr_macro": fpr_grid,
+                        "tpr_macro": tpr_macro,
+                    }
+                    is_multiclass = True
+            else:
+                roc_curves = None
+        except Exception:
+            # If predict_proba not available or anything weird: leave AUC=0 and skip ROC
+            roc_curves = None
+
+        print(f"📊 Client {self.client_id} Evaluation — Accuracy: {acc:.4f}, Precision: {prec:.4f}, Recall: {rec:.4f}, F1: {f1:.4f}, AUC: {auc_val:.4f}")
 
         # ---------------- Local saves: PNG + JSON ----------------
         run_dir = os.path.join(
@@ -156,13 +202,36 @@ class XGBClient(fl.client.NumPyClient):
         print(f"[Client {self.client_id}] Saved FI → {fi_png}")
         # ---------------------------------------------------------
 
+        # ROC curve
+        if roc_curves is not None:
+            plt.figure(figsize=(6, 5))
+            if not is_multiclass:
+                plt.plot(roc_curves["fpr"], roc_curves["tpr"], label=f"ROC (AUC={auc_val:.3f})")
+            else:
+                plt.plot(
+                    roc_curves["fpr_micro"],
+                    roc_curves["tpr_micro"],
+                    label=f"micro-avg ROC (AUC={auc_val:.3f})",
+                )
+                plt.plot(roc_curves["fpr_macro"], roc_curves["tpr_macro"], label="macro-avg ROC")
+            plt.plot([0, 1], [0, 1], linestyle="--", linewidth=1)
+            plt.xlabel("False Positive Rate")
+            plt.ylabel("True Positive Rate")
+            plt.title(f"Client {self.client_id} — ROC Curve")
+            plt.legend()
+            plt.tight_layout()
+            roc_png = os.path.join(run_dir, "roc_curve.png")
+            plt.savefig(roc_png, dpi=150)
+            plt.close()
+        # ---------------------------------------------------------
+
         # IMPORTANT: metrics dict must be scalars/str/bytes. Encode arrays as JSON strings.
         metrics = {
             "accuracy": float(acc),
             "precision": float(prec),
             "recall": float(rec),
             "f1": float(f1),
-
+            "auc": float(auc_val),
             # include sizes so server can do weighted averaging
             "num_test_examples": int(len(self.X_test)),
 

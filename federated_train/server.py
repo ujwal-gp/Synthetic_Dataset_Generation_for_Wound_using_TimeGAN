@@ -99,7 +99,7 @@ class Strategy(fl.server.strategy.FedAvg):
             return None, {}
 
         total_examples = 0
-        sum_acc = sum_prec = sum_rec = sum_f1 = 0.0
+        sum_acc = sum_prec = sum_rec = sum_f1 = sum_auc = 0.0
 
         # For confusion matrix we need to align labels across clients
         global_labels = None
@@ -118,6 +118,7 @@ class Strategy(fl.server.strategy.FedAvg):
             sum_prec += n * float(m.get("precision", 0.0))
             sum_rec  += n * float(m.get("recall", 0.0))
             sum_f1   += n * float(m.get("f1", 0.0))
+            sum_auc  += n * float(m.get("auc", 0.0))
 
             # --- confusion matrix aggregation ---
             if "confusion_matrix_json" in m:
@@ -167,12 +168,14 @@ class Strategy(fl.server.strategy.FedAvg):
         avg_prec = sum_prec / max(1, total_examples)
         avg_rec  = sum_rec  / max(1, total_examples)
         avg_f1   = sum_f1   / max(1, total_examples)
+        avg_auc  = sum_auc / max(1, total_examples)
 
         agg_metrics = {
             "accuracy": float(avg_acc),
             "precision": float(avg_prec),
             "recall": float(avg_rec),
             "f1": float(avg_f1),
+            "auc": float(avg_auc),
         }
 
         metrics_csv = os.path.join(RUN_DIR, "metrics.csv")
