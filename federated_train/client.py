@@ -61,7 +61,7 @@ class XGBClient(fl.client.NumPyClient):
         self.model = xgb.XGBClassifier(
             n_estimators=1,  # enable tiny warmup fit on first get_parameters
             max_depth=6,
-            learning_rate=0.3,
+            learning_rate=0.15,
             subsample=0.8,
             colsample_bytree=0.8,
             tree_method="hist",

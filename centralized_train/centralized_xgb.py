@@ -92,7 +92,7 @@ def resolve_data_path(
 def load_dataset(
     path: str,
     label_col: str = DEFAULT_LABEL_COL,
-    test_size: float = 0.2,
+    test_size: float = 0.3,
     random_state: int = 42,
     scale_features: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[str]]:
@@ -309,11 +309,11 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42, help="Random seed")
 
     # XGB hyperparams (sane defaults)
-    p.add_argument("--n_estimators", type=int, default=200)
-    p.add_argument("--max_depth", type=int, default=3)
-    p.add_argument("--learning_rate", type=float, default=0.1)
-    p.add_argument("--subsample", type=float, default=1.0)
-    p.add_argument("--colsample_bytree", type=float, default=1.0)
+    p.add_argument("--n_estimators", type=int, default=300)
+    p.add_argument("--max_depth", type=int, default=4)
+    p.add_argument("--learning_rate", type=float, default=0.15)
+    p.add_argument("--subsample", type=float, default=0.9)
+    p.add_argument("--colsample_bytree", type=float, default=0.9)
     p.add_argument("--reg_alpha", type=float, default=0.0)
     p.add_argument("--reg_lambda", type=float, default=1.0)
     return p.parse_args()
