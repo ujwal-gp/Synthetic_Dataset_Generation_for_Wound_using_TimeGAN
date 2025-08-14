@@ -122,7 +122,7 @@ def main():
     if not os.path.exists(METRICS_CSV):
         raise FileNotFoundError(f"{METRICS_CSV} not found")
     df = pd.read_csv(METRICS_CSV).sort_values("round").reset_index(drop=True)
-    for metric in ["accuracy", "precision", "recall", "f1"]:
+    for metric in ["accuracy", "precision", "recall", "f1", "auc"]:
         plot_curve(df, metric, out_dir, smooth=SMOOTH_WINDOW)
 
     # Confusion matrix from aggregated counts
