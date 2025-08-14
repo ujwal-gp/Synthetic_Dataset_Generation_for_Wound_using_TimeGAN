@@ -2,9 +2,9 @@
 
 import flwr as fl
 import numpy as np
-import os, json, csv, time
-import matplotlib.pyplot as plt
+import os, json, csv
 from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
+import xgboost as xgb
 
 # Settings
 N_ROUNDS = 10
@@ -13,206 +13,147 @@ GLOBAL_MODEL_PATH = "global_model.json"
 RUN_DIR = os.path.join("runs", "cm_fi")
 os.makedirs(RUN_DIR, exist_ok=True)
 
-# ---- 1. Initialize a Dummy XGBoost Model (once) ----
-import xgboost as xgb
+FI_LATEST_CSV = os.path.join(RUN_DIR, "feature_importance_latest.csv")
+CM_LATEST_CSV = os.path.join(RUN_DIR, "cm_latest.csv")
+METRICS_CSV   = os.path.join(RUN_DIR, "metrics.csv")
 
-def initialize_global_model():
-    model = xgb.XGBClassifier(n_estimators=200, max_depth=3)
-    X_dummy = np.array([[0, 0], [1, 1]])
-    y_dummy = np.array([0, 1])
-    model.fit(X_dummy, y_dummy)
 
-    model.get_booster().save_model(GLOBAL_MODEL_PATH)
-    print("📦 Initial global model saved.")
-
-def save_confusion_matrix(cm: np.ndarray, labels, out_path: str):
-    plt.figure(figsize=(6, 5))
-    plt.imshow(cm, interpolation='nearest')
-    plt.title("Global Confusion Matrix")
-    plt.xticks(ticks=np.arange(len(labels)), labels=labels, rotation=45, ha="right")
-    plt.yticks(ticks=np.arange(len(labels)), labels=labels)
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            plt.text(j, i, str(cm[i, j]), ha="center", va="center")
-    plt.xlabel("Predicted")
-    plt.ylabel("True")
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150)
-    plt.close()
-
-def save_feature_importance(fi: np.ndarray, out_path: str, feature_names=None, top_k=20):
-    idx = np.argsort(fi)[::-1]
-    idx = idx[:min(top_k, len(idx))]
-    names = [f"f{i}" for i in idx] if feature_names is None else [feature_names[i] for i in idx]
-    vals = fi[idx]
-
-    plt.figure(figsize=(8, max(4, len(idx) * 0.3)))
-    plt.barh(range(len(idx)), vals)
-    plt.gca().invert_yaxis()
-    plt.yticks(range(len(idx)), names)
-    plt.title("Global Feature Importance (avg gain)")
-    plt.xlabel("Importance")
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150)
-    plt.close()
-
-def append_row_csv(csv_path, row_dict, header_order):
-    file_exists = os.path.exists(csv_path)
-    with open(csv_path, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=header_order)
-        if not file_exists:
+def append_row_csv(path, row_dict, header_order=None):
+    need_header = not os.path.exists(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=header_order or list(row_dict.keys()))
+        if need_header:
             writer.writeheader()
         writer.writerow(row_dict)
 
-# ---- 2. Custom Federated Averaging Strategy ----
-class Strategy(fl.server.strategy.FedAvg):
-    def aggregate_fit(self, server_round, results, failures):
-        print(f"🔁 Aggregating Round {server_round} from {len(results)} clients...")
 
+class Strategy(fl.server.strategy.FedAvg):
+    def initialize_parameters(self, client_manager):
+        # Cold start: let clients provide the initial model so shapes match
+        return None
+
+    def aggregate_fit(self, server_round, results, failures):
+        """Pick best client update and aggregate feature importance."""
+        print(f"🔁 Aggregating Round {server_round} from {len(results)} clients...")
         if not results:
             print("⚠️ No results to aggregate.")
             return None, {}
-        
-        params = results[0][1].parameters
 
-        # ✅ Convert Flower Parameters -> list of np.ndarrays
-        arrays = parameters_to_ndarrays(params)
-        # You sent exactly one array (uint8 buffer of the JSON string)
-        buf = arrays[0]                       # dtype=uint8, shape=(N,)
+        # Choose best update by f1 (fallback accuracy)
+        best_idx, best_key, best_val = None, None, -1.0
+        fi_sum = None
+        n_weight = 0
+
+        for i, (client, fit_res) in enumerate(results):
+            m = fit_res.metrics or {}
+            key = "f1" if "f1" in m else ("accuracy" if "accuracy" in m else None)
+            if key is not None:
+                val = float(m[key])
+                if val > best_val:
+                    best_val, best_key, best_idx = val, key, i
+
+            # Aggregate feature importance vectors (weighted by num_examples)
+            fi_json = m.get("feature_importance_json")
+            if fi_json is not None:
+                try:
+                    vec = np.array(json.loads(fi_json), dtype=float)
+                    w = fit_res.num_examples or 0
+                    if fi_sum is None:
+                        fi_sum = np.zeros_like(vec, dtype=float)
+                    fi_sum += w * vec
+                    n_weight += w
+                except Exception:
+                    pass
+
+        if best_idx is None:
+            chosen_params = results[0][1].parameters
+            print("⚠️ No metrics returned by clients; defaulting to first update.")
+        else:
+            chosen_params = results[best_idx][1].parameters
+            print(f"✅ Chose client {best_idx} by best {best_key}={best_val:.4f}")
+
+        # Save global model JSON for reproducibility (optional for plotting)
+        arrays = parameters_to_ndarrays(chosen_params)
+        buf = arrays[0]
         model_json = buf.tobytes().decode("utf-8")
-        with open("global_model.json", "w", encoding="utf-8") as f:
+        with open(GLOBAL_MODEL_PATH, "w", encoding="utf-8") as f:
             f.write(model_json)
 
-        return params, {}
+        # Write latest aggregated feature importance (CSV)
+        if fi_sum is not None and n_weight > 0:
+            fi_avg = (fi_sum / max(1, n_weight)).tolist()
+            with open(FI_LATEST_CSV, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                # header: f0..f{n-1}, importance_gain
+                w.writerow(["feature_index", "importance_gain"])
+                for i, v in enumerate(fi_avg):
+                    w.writerow([f"f{i}", float(v)])
+            print(f"📝 Saved aggregated feature importance → {FI_LATEST_CSV}")
 
-    def initialize_parameters(self, client_manager):
-        if os.path.exists(GLOBAL_MODEL_PATH):
-            with open("global_model.json", "r", encoding="utf-8") as f:
-                json_str = f.read()
-            return ndarrays_to_parameters([np.frombuffer(json_str.encode("utf-8"), dtype=np.uint8)])
-        else:
-            print("⚠️ No global model found — will initialize from client.")
-            return None
+        return chosen_params, {}
+
     def aggregate_evaluate(self, server_round, results, failures):
-        # results: List[Tuple[ClientProxy, EvaluateRes]]
+        """Weighted average of metrics + sum confusion-matrix counts; log CSVs."""
         if not results:
             return None, {}
 
-        total_examples = 0
-        sum_acc = sum_prec = sum_rec = sum_f1 = sum_auc = 0.0
+        total = 0
+        sum_acc = sum_prec = sum_rec = sum_f1 = 0.0
 
-        # For confusion matrix we need to align labels across clients
-        global_labels = None
-        global_cm = None
-
-        # For feature importance (vector)
-        fi_sum = None
+        # CM counts
+        tp = fp = fn = tn = 0
 
         for _, eval_res in results:
-            m = eval_res.metrics
-            n = int(m.get("num_test_examples", eval_res.num_examples))
-            total_examples += n
+            n = eval_res.num_examples or 0
+            m = eval_res.metrics or {}
 
-            # weighted sums
+            total += n
             sum_acc  += n * float(m.get("accuracy", 0.0))
             sum_prec += n * float(m.get("precision", 0.0))
             sum_rec  += n * float(m.get("recall", 0.0))
             sum_f1   += n * float(m.get("f1", 0.0))
-            sum_auc  += n * float(m.get("auc", 0.0))
 
-            # --- confusion matrix aggregation ---
-            if "confusion_matrix_json" in m:
-                cm_payload = json.loads(m["confusion_matrix_json"])
-                labels = cm_payload["labels"]
-                cm = np.array(cm_payload["matrix"], dtype=np.int64)
+            tp += int(m.get("tp", 0))
+            fp += int(m.get("fp", 0))
+            fn += int(m.get("fn", 0))
+            tn += int(m.get("tn", 0))
 
-                if global_labels is None:
-                    # Initialize
-                    global_labels = labels
-                    global_cm = cm.copy()
-                else:
-                    # Align if label orders differ
-                    # Build mapping from client label index -> global index
-                    label_to_idx = {lbl: i for i, lbl in enumerate(global_labels)}
-                    # Expand global cm if new labels appear
-                    for lbl in labels:
-                        if lbl not in label_to_idx:
-                            # append new label
-                            global_labels.append(lbl)
-                            # expand cm
-                            new_size = len(global_labels)
-                            new_mat = np.zeros((new_size, new_size), dtype=np.int64)
-                            new_mat[:global_cm.shape[0], :global_cm.shape[1]] = global_cm
-                            global_cm = new_mat
-                            label_to_idx = {lbl2: i for i, lbl2 in enumerate(global_labels)}
+        avg_acc  = sum_acc  / max(1, total)
+        avg_prec = sum_prec / max(1, total)
+        avg_rec  = sum_rec  / max(1, total)
+        avg_f1   = sum_f1   / max(1, total)
 
-                    # Now add this client's cm into the correct indices
-                    for i_client, lbl_i in enumerate(labels):
-                        for j_client, lbl_j in enumerate(labels):
-                            gi = label_to_idx[lbl_i]
-                            gj = label_to_idx[lbl_j]
-                            global_cm[gi, gj] += cm[i_client, j_client]
-
-            # --- feature importance aggregation ---
-            if "feature_importance_json" in m:
-                fi_vec = np.array(json.loads(m["feature_importance_json"]), dtype=float)
-                if fi_sum is None:
-                    fi_sum = np.zeros_like(fi_vec, dtype=float)
-                # Simple average later (equal weight per client) or weight by n:
-                fi_sum += fi_vec  # equal client weight
-                # If you prefer weighting by examples, do: fi_sum += n * fi_vec
-
-        # --- finalize aggregates ---
-        k_clients = max(1, len(results))
-        avg_acc  = sum_acc  / max(1, total_examples)
-        avg_prec = sum_prec / max(1, total_examples)
-        avg_rec  = sum_rec  / max(1, total_examples)
-        avg_f1   = sum_f1   / max(1, total_examples)
-        avg_auc  = sum_auc / max(1, total_examples)
-
-        agg_metrics = {
-            "accuracy": float(avg_acc),
-            "precision": float(avg_prec),
-            "recall": float(avg_rec),
-            "f1": float(avg_f1),
-            "auc": float(avg_auc),
-        }
-
-        metrics_csv = os.path.join(RUN_DIR, "metrics.csv")
         append_row_csv(
-            metrics_csv,
+            METRICS_CSV,
             {"round": server_round, "accuracy": avg_acc, "precision": avg_prec, "recall": avg_rec, "f1": avg_f1},
             header_order=["round", "accuracy", "precision", "recall", "f1"],
         )
+        print(f"📈 Round {server_round} — Acc={avg_acc:.4f}, Prec={avg_prec:.4f}, Rec={avg_rec:.4f}, F1={avg_f1:.4f}")
 
-        if fi_sum is not None and k_clients > 0:
-            fi_avg = (fi_sum / k_clients)
-            agg_metrics["feature_importance_json"] = json.dumps(fi_avg.tolist())
-            fi_png = os.path.join(RUN_DIR, f"fi_round_{server_round:03d}.png")
-            save_feature_importance(fi_avg, fi_png, feature_names=None, top_k=20)
+        # Save latest confusion-matrix counts as CSV for plotting later
+        with open(CM_LATEST_CSV, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["cell", "count"])
+            w.writerow(["tn", tn])
+            w.writerow(["fp", fp])
+            w.writerow(["fn", fn])
+            w.writerow(["tp", tp])
+        print(f"📝 Saved aggregated confusion matrix counts → {CM_LATEST_CSV}")
 
-        if global_cm is not None and global_labels is not None:
-            agg_metrics["global_confusion_matrix_json"] = json.dumps({
-                "labels": list(map(int, global_labels)),
-                "matrix": global_cm.tolist(),
-            })
-            cm_png = os.path.join(RUN_DIR, f"cm_round_{server_round:03d}.png")
-            save_confusion_matrix(global_cm, global_labels, cm_png)
+        return None, {"accuracy": avg_acc, "precision": avg_prec, "recall": avg_rec, "f1": avg_f1}
 
-        # (loss, metrics) required by Flower; loss here can be 1-acc
-        agg_loss = float(1.0 - avg_acc)
-        return agg_loss, agg_metrics
 
-# ---- 3. Main Server Loop ----
 def main():
-    if not os.path.exists(GLOBAL_MODEL_PATH):
-        print("🔧 Initializing global model...")
-        initialize_global_model()
+    # simple config passed to clients
+    def fit_config(server_round: int):
+        return {"rounds_to_add": 25}
 
     strategy = Strategy(
         fraction_fit=1.0,
+        fraction_evaluate=1.0,
         min_fit_clients=N_CLIENTS,
         min_available_clients=N_CLIENTS,
+        on_fit_config_fn=fit_config,
     )
 
     print("🚀 Starting Flower server...")
