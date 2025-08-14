@@ -5,7 +5,12 @@ import numpy as np
 import os
 import json
 import pandas as pd
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
+from sklearn.metrics import (
+    accuracy_score,
+    precision_recall_fscore_support,
+    confusion_matrix,
+    roc_auc_score,
+)
 from sklearn.preprocessing import MinMaxScaler
 import sys
 from sklearn.exceptions import NotFittedError
@@ -15,7 +20,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-
 FEATURE_COLS = [
     "Ammonia (ppm)", "Acetone (ppm)", "Ethanol (ppm)", "Hydrogen Sulfide (ppm)",
     "QoS", "message_length", "retained", "duplicate",
@@ -23,10 +27,10 @@ FEATURE_COLS = [
 
 def load_client_data(client_id, data_dir="../client_data"):
     train_file = os.path.join(data_dir, f"client_{client_id}_train.csv")
-    test_file = os.path.join(data_dir, f"client_{client_id}_test.csv")
+    test_file  = os.path.join(data_dir, f"client_{client_id}_test.csv")
 
     train_df = pd.read_csv(train_file)
-    test_df = pd.read_csv(test_file)
+    test_df  = pd.read_csv(test_file)
 
     # Enforce schema / order
     X_train = train_df[FEATURE_COLS].copy()
@@ -51,11 +55,11 @@ class XGBClient(fl.client.NumPyClient):
     def __init__(self, X_train, y_train, X_test, y_test, client_id):
         self.client_id = client_id
         self.X_train, self.y_train = X_train, y_train
-        self.X_test, self.y_test = X_test, y_test
+        self.X_test, self.y_test   = X_test, y_test
 
         # Start with 1 tree so we can do a minimal cold-start fit if needed
         self.model = xgb.XGBClassifier(
-            n_estimators=1,               # <- was 0; 1 enables a tiny warmup fit
+            n_estimators=1,  # enable tiny warmup fit on first get_parameters
             max_depth=6,
             learning_rate=0.3,
             subsample=0.8,
@@ -68,10 +72,8 @@ class XGBClient(fl.client.NumPyClient):
     def _ensure_fitted(self):
         """If booster does not exist yet (cold start), fit 1 round on local data."""
         try:
-            # Will raise NotFittedError if not trained/loaded yet
             _ = self.model.get_booster()
         except NotFittedError:
-            # Minimal fit to materialize a booster
             self.model.set_params(n_estimators=max(1, self.model.get_params().get("n_estimators", 1)))
             self.model.fit(self.X_train, self.y_train, verbose=False)
 
@@ -99,20 +101,21 @@ class XGBClient(fl.client.NumPyClient):
         if rounds_to_add <= 0:
             rounds_to_add = 25
 
-        # Continue boosting from provided global model if available
+        # Continue boosting
         current_estimators = self.model.get_params().get("n_estimators", 1)
         self.model.set_params(n_estimators=current_estimators + rounds_to_add)
 
         if xgb_model_arg:
             self.model.fit(self.X_train, self.y_train, xgb_model=xgb_model_arg, verbose=False)
         else:
-            # First round on this client (cold start already handled, but train more now)
             self.model.fit(self.X_train, self.y_train, verbose=False)
 
         # Local eval for server selection + FI vector
         preds = self.model.predict(self.X_test)
         acc = accuracy_score(self.y_test, preds)
-        prec, rec, f1, _ = precision_recall_fscore_support(self.y_test, preds, average="binary", zero_division=0)
+        prec, rec, f1, _ = precision_recall_fscore_support(
+            self.y_test, preds, average="binary", zero_division=0
+        )
 
         metrics = {
             "accuracy": float(acc),
@@ -146,26 +149,57 @@ class XGBClient(fl.client.NumPyClient):
                 f.write(json_str)
             self.model.load_model(model_path)
 
+        # Predictions and probabilities
         preds = self.model.predict(self.X_test)
-        acc = accuracy_score(self.y_test, preds)
-        prec, rec, f1, _ = precision_recall_fscore_support(self.y_test, preds, average="binary", zero_division=0)
+        try:
+            probs = self.model.predict_proba(self.X_test)[:, 1]
+        except Exception:
+            # fallback for safety
+            probs = preds.astype(float)
 
-        # Confusion matrix counts for aggregation on server
+        acc = accuracy_score(self.y_test, preds)
+        prec, rec, f1, _ = precision_recall_fscore_support(
+            self.y_test, preds, average="binary", zero_division=0
+        )
+
+        # AUC
+        try:
+            auc = roc_auc_score(self.y_test, probs)
+        except Exception:
+            auc = float("nan")
+
+        # Confusion matrix counts for 0.5 threshold
         try:
             cm = confusion_matrix(self.y_test, preds, labels=[0, 1])
             tn, fp, fn, tp = cm.ravel()
         except Exception:
             tn = fp = fn = tp = 0
 
+        # Thresholded counts for server-side ROC aggregation (41 thresholds)
+        thresholds = np.linspace(0.0, 1.0, 41)
+        tp_list, fp_list, fn_list, tn_list = [], [], [], []
+        y_true = self.y_test
+        for thr in thresholds:
+            y_hat = (probs >= thr).astype(int)
+            cm_t = confusion_matrix(y_true, y_hat, labels=[0, 1])
+            tn_t, fp_t, fn_t, tp_t = cm_t.ravel()
+            tp_list.append(int(tp_t)); fp_list.append(int(fp_t))
+            fn_list.append(int(fn_t)); tn_list.append(int(tn_t))
+
         metrics = {
             "accuracy": float(acc),
             "precision": float(prec),
             "recall": float(rec),
             "f1": float(f1),
+            "auc": float(auc) if np.isfinite(auc) else 0.0,
             "tp": int(tp),
             "fp": int(fp),
             "fn": int(fn),
             "tn": int(tn),
+            "roc_counts_json": json.dumps({
+                "thr": thresholds.tolist(),
+                "tp": tp_list, "fp": fp_list, "fn": fn_list, "tn": tn_list
+            }),
         }
         # Flower expects a loss; we'll return 1-accuracy
         return float(1.0 - acc), len(self.X_test), metrics
